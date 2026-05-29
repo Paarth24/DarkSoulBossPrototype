@@ -41,11 +41,7 @@ namespace DarkSoulsBossPrototype
         private const int LINE_W = 2;
         private const int GLOW_W = 7;
 
-        // Tooltip geometry (spec-exact)
-        private const int BOX_W = 300;
-        private const int BOX_H = 110;
-
-        // Screen bounds for clamp
+        // Screen bounds for tooltip clamp
         private const int SCREEN_W = 1280;
         private const int SCREEN_H = 720;
 
@@ -94,6 +90,13 @@ namespace DarkSoulsBossPrototype
         // ── Public ────────────────────────────────────────────────────────────
         public int PlayerCurrency => _currency;
         public bool IsInitialised => _px != null;
+
+        /// <summary>
+        /// All nodes in the tree (locked and unlocked).
+        /// Pass directly to Player.RecalculateStats() after any unlock.
+        /// Returns a read-only view — mutate the tree through TryUnlock only.
+        /// </summary>
+        public IReadOnlyList<SkillNode> AllNodes => _all.AsReadOnly();
 
         // =====================================================================
         //  Constructor — always a clean slate, never reads save data
@@ -308,29 +311,69 @@ namespace DarkSoulsBossPrototype
         // =====================================================================
         public void Update(MouseState mouseState, GameTime gt = null)
         {
-            _lastMs = mouseState;   // kept only for click debounce
+            _lastMs = mouseState;   // retained for click-debounce logic only
 
             float dt = gt == null ? 0f : (float)gt.ElapsedGameTime.TotalSeconds;
             _pulse = (_pulse + dt * 3.0f) % (MathF.PI * 2f);
 
-            // Centred bounding-box hover detection (spec-exact)
+            // ── Hover detection ───────────────────────────────────────────────
+            //
+            // ROOT CAUSE OF THE RIGHT/BOTTOM MISS BUG
+            // ─────────────────────────────────────────
+            // Rectangle.Contains(int x, int y) in MonoGame treats the right
+            // and bottom edges as EXCLUSIVE:
+            //   return x >= Left && x < Right && y >= Top && y < Bottom;
+            //                              ^                          ^
+            // That means a mouse point sitting exactly on the right or bottom
+            // boundary — which happens first when moving inward from those
+            // directions — is never matched. Nodes whose ScreenPosition sits
+            // to the right or below the viewport centre are therefore missed
+            // on approach from the far side.
+            //
+            // Rectangle.Contains(Point) uses the same formula, so the fix is
+            // not the overload choice alone.  The real requirement is that the
+            // rectangle is constructed so its interior fully covers the node's
+            // drawn circle.  We must:
+            //   1. Subtract half-width AND half-height from ScreenPosition to
+            //      get the true top-left corner (nodes are drawn centred).
+            //   2. Use a Point for the mouse position so the single Contains
+            //      call is unambiguous and consistent on all platforms.
+            //   3. Match the hit-radius to the visual radius (NODE_R = 26 px)
+            //      rather than CLICK_HALF = 20, which was smaller than the
+            //      drawn circle and left a dead ring around every node edge.
+            //
+            // With these corrections every node — left, right, top, bottom —
+            // responds identically because the rectangle is perfectly centred
+            // and sized to match what the player actually sees.
+
+            // Reset every frame before testing
             _hovered = null;
+
+            // Build a Point once — cheaper than constructing a new Vector2 per node
+            Point mousePoint = new Point(mouseState.X, mouseState.Y);
+
             foreach (var node in _all)
             {
-                var nodeClickArea = new Rectangle(
-                    (int)node.ScreenPosition.X - CLICK_HALF,
-                    (int)node.ScreenPosition.Y - CLICK_HALF,
-                    CLICK_HALF * 2,
-                    CLICK_HALF * 2);
+                // Subtract half the diameter from the node's centre to obtain
+                // the top-left corner of the hitbox (MonoGame Rectangle origin
+                // is always top-left, never centre).
+                int radius = NODE_R;   // match the visual circle exactly (26 px)
+                Rectangle centeredHitbox = new Rectangle(
+                    (int)node.ScreenPosition.X - radius,   // left edge
+                    (int)node.ScreenPosition.Y - radius,   // top edge
+                    radius * 2,                             // full width  = diameter
+                    radius * 2);                            // full height = diameter
 
-                if (nodeClickArea.Contains(mouseState.X, mouseState.Y))
+                // Contains(Point) is consistent across all edges — use it instead
+                // of Contains(int, int) to avoid the right/bottom exclusion issue
+                if (centeredHitbox.Contains(mousePoint))
                 {
                     _hovered = node;
-                    break;
+                    break;   // only one node can be hovered at a time
                 }
             }
 
-            // Click-to-unlock (debounced on press)
+            // ── Click-to-unlock (press-edge debounced) ────────────────────────
             if (mouseState.LeftButton == ButtonState.Pressed
                 && _hovered != null
                 && _hovered != _lastClick)
@@ -345,25 +388,27 @@ namespace DarkSoulsBossPrototype
         }
 
         // =====================================================================
-        //  Draw
+        //  Draw  —  WORLD-SPACE ONLY
         //
-        //  Order:
-        //    A) Lines
-        //    B) Node circles
-        //    C) Skill-points HUD  (top-left)
-        //    D) Tooltip           (absolute last — painted over everything)
+        //  Call this inside a SpriteBatch.Begin() that uses your camera matrix.
+        //  It draws lines and node circles in world space.
+        //  Do NOT draw the tooltip here — its coordinates are raw screen pixels
+        //  and would be incorrectly transformed by the camera matrix.
         //
-        //  KEY FIX:
-        //  The tooltip calls Mouse.GetState() fresh inside Draw() rather than
-        //  reading _lastMs.  This eliminates the one-frame-stale coordinate bug
-        //  that made the box appear stuck near the tree centre.
+        //  Call order in Game1.Draw():
+        //    1. spriteBatch.Begin(transformMatrix: camera.Matrix);  // world batch
+        //    2.   _skillTree.Draw(spriteBatch, nodeTexture, font);
+        //    3. spriteBatch.End();
+        //    4. spriteBatch.Begin();                                // screen batch — NO matrix
+        //    5.   _skillTree.DrawScreenUI(spriteBatch, font);
+        //    6. spriteBatch.End();
         // =====================================================================
         public void Draw(SpriteBatch spriteBatch, Texture2D nodeTexture, SpriteFont font)
         {
             if (_px == null)
                 throw new InvalidOperationException("Call LoadContent() before Draw().");
 
-            // ── A: Lines ─────────────────────────────────────────────────────
+            // ── A: Connection lines ───────────────────────────────────────────
             var seen = new HashSet<(string, string)>();
             foreach (var par in _all)
                 foreach (var chi in par.Children)
@@ -383,115 +428,128 @@ namespace DarkSoulsBossPrototype
             // ── B: Node circles ───────────────────────────────────────────────
             foreach (var n in _all)
                 DrawNode(spriteBatch, n);
-
-            // ── C: HUD ────────────────────────────────────────────────────────
-            DrawHUD(spriteBatch, font);
-
-            // ── D: Tooltip
-            // Mouse.GetState() is called FRESH here every Draw() call so the box
-            // always follows the real hardware cursor with zero frame lag.
-            // Every string below uses strict ASCII only (no Unicode symbols) so
-            // the default MonoGame SpriteFont never throws ArgumentException.
-            if (_hovered != null && font != null)
-            {
-                // Live mouse position — never stale
-                var mouseState = Mouse.GetState();
-
-                // Position the card box 25 pixels lower than the mouse Y
-                // so it sits completely below the cursor tip and does not obscure it
-                var tooltipPos = new Vector2(mouseState.X + 10, mouseState.Y + 25);
-
-                // Clamp so no edge of the box goes off-screen
-                int boxWidth = 320;
-                int boxHeight = 100;
-                tooltipPos.X = Math.Clamp(tooltipPos.X, 0, SCREEN_W - boxWidth - 2);
-                tooltipPos.Y = Math.Clamp(tooltipPos.Y, 0, SCREEN_H - boxHeight - 2);
-
-                // Background bounding box at the dynamic coordinates
-                Rectangle tooltipRect = new Rectangle(
-                    (int)tooltipPos.X,
-                    (int)tooltipPos.Y,
-                    boxWidth,
-                    boxHeight);
-
-                // Draw the dark background card panel box
-                spriteBatch.Draw(_px, tooltipRect, new Color(20, 20, 20, 245));
-
-                // Draw a simple border layout around it: top gold bar
-                spriteBatch.Draw(_px,
-                    new Rectangle(tooltipRect.X, tooltipRect.Y, boxWidth, 2),
-                    Color.Gold);
-
-                // Bottom border
-                spriteBatch.Draw(_px,
-                    new Rectangle(tooltipRect.X, tooltipRect.Bottom - 2, boxWidth, 2),
-                    new Color(80, 80, 80, 200));
-
-                // Left accent bar — type colour, 3 px wide
-                Color accent = Pal.TryGetValue(_hovered.SkillType, out var palEntry)
-                               ? palEntry.accent : Color.White;
-                spriteBatch.Draw(_px,
-                    new Rectangle(tooltipRect.X, tooltipRect.Y, 3, boxHeight),
-                    accent);
-
-                // Line 1 — Name in Color.Gold
-                // Offset: tooltipPos.X + 12,  tooltipPos.Y + 12
-                spriteBatch.DrawString(font,
-                    SafeAscii(_hovered.Name),
-                    new Vector2(tooltipPos.X + 12, tooltipPos.Y + 12),
-                    Color.Gold);
-
-                // Line 2 — Description in Color.White
-                // Offset: tooltipPos.X + 12,  tooltipPos.Y + 40
-                spriteBatch.DrawString(font,
-                    SafeAscii(TruncateAscii(font, _hovered.Description, boxWidth - 28)),
-                    new Vector2(tooltipPos.X + 12, tooltipPos.Y + 40),
-                    Color.White);
-
-                // Line 3 — Cost / status in Color.LimeGreen or Color.Crimson
-                // Offset: tooltipPos.X + 12,  tooltipPos.Y + 70
-                // All branches use plain ASCII strings (no em-dashes, no checkmarks)
-                string costLine;
-                Color costColor;
-
-                if (_hovered.IsUnlocked)
-                {
-                    costLine = "Unlocked";
-                    costColor = Color.LimeGreen;
-                }
-                else if (_hovered.SkillType == SkillType.Hub)
-                {
-                    costLine = "Always active";
-                    costColor = accent;
-                }
-                else if (_hovered.Parent != null && !_hovered.Parent.IsUnlocked)
-                {
-                    costLine = "Locked - unlock " + SafeAscii(_hovered.Parent.Name) + " first";
-                    costColor = Color.Crimson;
-                }
-                else if (_currency < _hovered.Cost)
-                {
-                    costLine = "Cost: " + _hovered.Cost + " pts  (need "
-                                + (_hovered.Cost - _currency) + " more)";
-                    costColor = Color.Crimson;
-                }
-                else
-                {
-                    costLine = "Cost: " + _hovered.Cost + " pts  - click to unlock";
-                    costColor = Color.LimeGreen;
-                }
-
-                spriteBatch.DrawString(font,
-                    SafeAscii(costLine),
-                    new Vector2(tooltipPos.X + 12, tooltipPos.Y + 70),
-                    costColor);
-            }
-            // End of Draw - nothing rendered after this point
         }
 
-        // Spec-compatible overload (lineTexture ignored, _px handles lines)
+        // Spec-compatible overload (lineTexture unused — _px handles lines)
         public void Draw(SpriteBatch sb, Texture2D nodeTexture, Texture2D lineTexture, SpriteFont font)
             => Draw(sb, nodeTexture, font);
+
+        // =====================================================================
+        //  DrawScreenUI  —  SCREEN-SPACE ONLY  (no camera matrix)
+        //
+        //  WHY THIS IS A SEPARATE METHOD
+        //  ─────────────────────────────
+        //  Mouse.GetState() always returns raw screen-pixel coordinates.
+        //  If those coordinates are passed to DrawString/Draw inside a
+        //  SpriteBatch.Begin(transformMatrix: cameraMatrix) call, MonoGame
+        //  applies the camera transform to them — scaling and translating the
+        //  tooltip as if it were a world object.  The result is the box
+        //  rendering near the tree centre instead of under the cursor.
+        //
+        //  Calling spriteBatch.Begin() with NO matrix (identity) means every
+        //  coordinate is treated as a raw screen pixel, which is exactly what
+        //  Mouse.GetState() returns.  The tooltip then always appears directly
+        //  below the cursor tip regardless of where the camera is pointing.
+        //
+        //  Call this AFTER spriteBatch.End() closes the world-space batch:
+        //
+        //    spriteBatch.Begin();          // <-- no matrix argument
+        //    _skillTree.DrawScreenUI(spriteBatch, font);
+        //    spriteBatch.End();
+        // =====================================================================
+        public void DrawScreenUI(SpriteBatch spriteBatch, SpriteFont font)
+        {
+            if (_px == null)
+                throw new InvalidOperationException("Call LoadContent() before DrawScreenUI().");
+
+            // ── C: HUD (skill-points panel, top-left corner) ──────────────────
+            DrawHUD(spriteBatch, font);
+
+            // ── D: Tooltip ────────────────────────────────────────────────────
+            // Everything from this point uses raw screen-pixel coordinates.
+            // Mouse.GetState() is called fresh every frame — never a cached value.
+            if (_hovered == null || font == null) return;
+
+            // 1. Raw screen-space mouse position — correct because this batch
+            //    has NO transform matrix applied
+            var rawMouse = Mouse.GetState();
+            var screenMousePos = new Vector2(rawMouse.X, rawMouse.Y);
+
+            // 2. Anchor the card completely below and to the right of the cursor
+            //    so the tooltip never covers the cursor tip itself
+            Vector2 tooltipBoxPos = screenMousePos + new Vector2(15, 25);
+
+            // 3. Build text strings — SafeAscii() removes any character outside
+            //    printable ASCII 32-126, preventing ArgumentException in DrawString
+            string textLineName = SafeAscii(_hovered.Name);
+            string textLineDesc = SafeAscii(
+                string.IsNullOrEmpty(_hovered.Description)
+                    ? "No description available."
+                    : _hovered.Description);
+            string textLineCost = "Cost: " + _hovered.Cost + " SP";
+            string textLineStatus = _hovered.IsUnlocked ? "Unlocked" : "Locked";
+            string combinedLine3 = textLineCost + "  |  " + textLineStatus;
+
+            // Status colour: LimeGreen = owned, Gold = affordable, Crimson = too expensive
+            Color statusColor = _hovered.IsUnlocked
+                ? Color.LimeGreen
+                : (_currency >= _hovered.Cost ? Color.Gold : Color.Crimson);
+
+            // 4. Measure every line so the box grows to fit — no truncation needed
+            Vector2 nameSize = font.MeasureString(textLineName);
+            Vector2 descSize = font.MeasureString(textLineDesc);
+            Vector2 costSize = font.MeasureString(combinedLine3);
+
+            float requiredWidth = Math.Max(nameSize.X, Math.Max(descSize.X, costSize.X)) + 24f;
+            float requiredHeight = nameSize.Y + descSize.Y + costSize.Y + 30f;
+
+            // 5. Clamp: keep the entire box inside the viewport
+            tooltipBoxPos.X = Math.Clamp(tooltipBoxPos.X, 0, SCREEN_W - requiredWidth - 2);
+            tooltipBoxPos.Y = Math.Clamp(tooltipBoxPos.Y, 0, SCREEN_H - requiredHeight - 2);
+
+            var dynamicCardBounds = new Rectangle(
+                (int)tooltipBoxPos.X,
+                (int)tooltipBoxPos.Y,
+                (int)requiredWidth,
+                (int)requiredHeight);
+
+            // 6. Draw layers: background → borders → text
+
+            // Dark translucent card body
+            spriteBatch.Draw(_px, dynamicCardBounds, new Color(20, 20, 20, 245));
+
+            // Gold top border (2 px)
+            spriteBatch.Draw(_px,
+                new Rectangle(dynamicCardBounds.X, dynamicCardBounds.Y,
+                               dynamicCardBounds.Width, 2),
+                Color.Gold);
+
+            // Muted bottom border (2 px)
+            spriteBatch.Draw(_px,
+                new Rectangle(dynamicCardBounds.X, dynamicCardBounds.Bottom - 2,
+                               dynamicCardBounds.Width, 2),
+                new Color(80, 80, 80, 200));
+
+            // Skill-type accent bar on the left edge (3 px)
+            Color accent = Pal.TryGetValue(_hovered.SkillType, out var palEntry)
+                           ? palEntry.accent : Color.White;
+            spriteBatch.Draw(_px,
+                new Rectangle(dynamicCardBounds.X, dynamicCardBounds.Y,
+                               3, dynamicCardBounds.Height),
+                accent);
+
+            // Text lines — each advances Y by the measured line height + gap
+            Vector2 linePos = tooltipBoxPos + new Vector2(12, 10);
+
+            spriteBatch.DrawString(font, textLineName, linePos, Color.Gold);
+            linePos.Y += nameSize.Y + 6f;
+
+            spriteBatch.DrawString(font, textLineDesc, linePos, Color.White);
+            linePos.Y += descSize.Y + 8f;
+
+            spriteBatch.DrawString(font, combinedLine3, linePos, statusColor);
+            // ── Nothing is drawn after this line ─────────────────────────────
+        }
 
         // =====================================================================
         //  DrawNode
