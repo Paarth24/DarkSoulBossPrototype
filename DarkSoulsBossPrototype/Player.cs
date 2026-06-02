@@ -1,8 +1,9 @@
-using System;
-using System.Collections.Generic;
+using DarkSoulsBossPrototype;
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
 using Microsoft.Xna.Framework.Input;
+using System;
+using System.Collections.Generic;
 
 namespace DarkSoulsBossPrototype
 {
@@ -35,8 +36,8 @@ namespace DarkSoulsBossPrototype
         // =====================================================================
 
         // Standing hitbox
-        public const int WIDTH         = 64;
-        public const int HEIGHT        = 64;    // full standing height
+        public const int WIDTH = 64;
+        public const int HEIGHT = 64;    // full standing height
 
         // Crouching hitbox — same width, half the height, anchored to the ground
         // so Position.Y stays the same but the top of the box shifts down
@@ -46,9 +47,9 @@ namespace DarkSoulsBossPrototype
         private const float DRAW_SCALE = 2.0f;
 
         // Jump physics
-        private const float JUMP_VELOCITY   = -520f;   // px/s upward (negative = up in screen space)
-        private const float GRAVITY         =  980f;   // px/s^2 downward acceleration
-        private const float MAX_FALL_SPEED  =  900f;   // terminal velocity cap
+        private const float JUMP_VELOCITY = -520f;   // px/s upward (negative = up in screen space)
+        private const float GRAVITY = 980f;   // px/s^2 downward acceleration
+        private const float MAX_FALL_SPEED = 900f;   // terminal velocity cap
 
         // =====================================================================
         //  Skill points and stats
@@ -62,11 +63,11 @@ namespace DarkSoulsBossPrototype
 
         // ── Physics state ─────────────────────────────────────────────────────
         // Vertical velocity in px/s. Negative = moving up, positive = moving down.
-        private float _velocityY   = 0f;
+        private float _velocityY = 0f;
 
         // True when the player is standing on the ground (not airborne).
         // Gates the jump so double-jumping is impossible.
-        private bool  _isGrounded  = true;
+        private bool _isGrounded = true;
 
         // The Y coordinate of the ground line (bottom of the standing hitbox).
         // Set once from the spawn position and never changes, so the player
@@ -82,9 +83,9 @@ namespace DarkSoulsBossPrototype
             get
             {
                 bool crouching = CurrentAnimState == PlayerAnimationState.Crouching;
-                int  h         = crouching ? CROUCH_HEIGHT : HEIGHT;
+                int h = crouching ? CROUCH_HEIGHT : HEIGHT;
                 // When crouching, shift Position.Y down so the bottom stays grounded
-                int  yOffset   = crouching ? HEIGHT - CROUCH_HEIGHT : 0;
+                int yOffset = crouching ? HEIGHT - CROUCH_HEIGHT : 0;
                 return new Rectangle((int)Position.X, (int)Position.Y + yOffset, WIDTH, h);
             }
         }
@@ -100,43 +101,63 @@ namespace DarkSoulsBossPrototype
         }
 
         public float CurrentHP { get; set; }
-        public bool  IsDead    => CurrentHP <= 0f;
+        public bool IsDead => CurrentHP <= 0f;
 
         // Base stats (before skill-tree modifiers)
-        private float baseMaxHP            = 100f;
-        private float baseMoveSpeed        = 200f;
-        private float baseAttackDamage     = 15f;
-        private float baseDamageReduction  = 0.0f;
+        private float baseMaxHP = 100f;
+        private float baseMoveSpeed = 200f;
+        private float baseAttackDamage = 15f;
+        private float baseDamageReduction = 0.0f;
         private float baseArmorPenetration = 0.0f;
 
         // Active stats (recalculated by RecalculateStats)
-        public float MaxHP            { get; private set; }
-        public float MoveSpeed        { get; private set; }
-        public float AttackDamage     { get; private set; }
-        public float DamageReduction  { get; private set; }
+        public float MaxHP { get; private set; }
+        public float MoveSpeed { get; private set; }
+        public float AttackDamage { get; private set; }
+        public float DamageReduction { get; private set; }
         public float ArmorPenetration { get; private set; }
 
         // Modifier accumulators
-        private float _totalMaxHPBonus       = 0f;
-        private float _totalMoveSpeedPct     = 0f;
-        private float _totalAttackDamagePct  = 0f;
-        private float _totalDamageReduction  = 0f;
+        private float _totalMaxHPBonus = 0f;
+        private float _totalMoveSpeedPct = 0f;
+        private float _totalAttackDamagePct = 0f;
+        private float _totalDamageReduction = 0f;
         private float _totalArmorPenetration = 0f;
 
         // Per-node modifier constants
-        private const float HP_BONUS_PER_NODE          = 20f;
-        private const float MOVE_SPEED_PCT_PER_NODE    = 0.10f;
+        private const float HP_BONUS_PER_NODE = 20f;
+        private const float MOVE_SPEED_PCT_PER_NODE = 0.10f;
         private const float ATTACK_DAMAGE_PCT_PER_NODE = 0.15f;
-        private const float DAMAGE_REDUCTION_PER_NODE  = 0.08f;
-        private const float ARMOR_PEN_PER_NODE         = 0.12f;
-        private const float MAX_DAMAGE_REDUCTION       = 0.90f;
+        private const float DAMAGE_REDUCTION_PER_NODE = 0.08f;
+        private const float ARMOR_PEN_PER_NODE = 0.12f;
+        private const float MAX_DAMAGE_REDUCTION = 0.90f;
 
         // =====================================================================
         //  Animation state
         // =====================================================================
 
-        public enum PlayerAnimationState { Idle, Running, Attacking, Hurt, Dead, Crouching, Jumping }
+        public enum PlayerAnimationState
+        {
+            Idle,
+            Running,
+            LightAttack1,   // LMB first click  — upswing    L0-L7
+            LightAttack2,   // LMB combo click  — followup   L8-L15
+            Stab,           // Q key            — stab       L8-L15
+            HeavyAttack,    // Z key            — downswing  L16-L23
+            Hurt,
+            Dead,
+            Crouching,
+            Jumping
+        }
         public PlayerAnimationState CurrentAnimState { get; private set; } = PlayerAnimationState.Idle;
+
+        // ── Combo window ──────────────────────────────────────────────────────
+        // After LightAttack1 finishes, a combo is available for COMBO_WINDOW seconds.
+        // If the player clicks LMB within that window, LightAttack2 plays.
+        private const float COMBO_WINDOW = 0.35f;  // seconds to input the combo
+        private bool _comboWindowOpen = false;  // true while window is live
+        private float _comboWindowTimer = 0f;     // counts down from COMBO_WINDOW
+        private bool _comboPending = false;  // LMB was pressed during window
 
         // ── Sprite sheet references ───────────────────────────────────────────
         private Texture2D _sheetIdle;
@@ -150,15 +171,15 @@ namespace DarkSoulsBossPrototype
         // ── Active sheet + grid description ──────────────────────────────────
         // Updated every time SetAnimation() is called.
         private Texture2D _activeSheet;
-        private int       _frameCols;      // number of columns in the active sheet
-        private int       _frameRows;      // number of rows in the active sheet
-        private int       _frameW;         // pixel width of one frame cell
-        private int       _frameH;         // pixel height of one frame cell
-        private int       _totalFrames;    // cols * rows
+        private int _frameCols;      // number of columns in the active sheet
+        private int _frameRows;      // number of rows in the active sheet
+        private int _frameW;         // pixel width of one frame cell
+        private int _frameH;         // pixel height of one frame cell
+        private int _totalFrames;    // cols * rows
 
         // ── Playback state ────────────────────────────────────────────────────
-        private int   _linearFrame  = 0;   // 0 .. totalFrames-1, read left-to-right then down
-        private float _frameTimer   = 0f;
+        private int _linearFrame = 0;   // 0 .. totalFrames-1, read left-to-right then down
+        private float _frameTimer = 0f;
         private float _frameDuration = 0.10f;   // seconds per frame
 
         // ── Direction ────────────────────────────────────────────────────────
@@ -170,14 +191,13 @@ namespace DarkSoulsBossPrototype
 
         // ── Input edge detection ──────────────────────────────────────────────
         private KeyboardState _prevKb;
+        private MouseState _prevMs;   // previous frame mouse state for LMB edge detect
 
         // ── 1x1 pixel fallback texture (created in LoadContent) ───────────────
         private Texture2D _pixel;
 
         // =====================================================================
-        //  Sheet descriptor table
-        //  Encodes every grid layout discovered by pixel analysis.
-        //  Add new animations here without touching any other code.
+        //  Sheet descriptor  — grid layout for non-attack sheets
         // =====================================================================
         private readonly struct SheetInfo
         {
@@ -185,53 +205,91 @@ namespace DarkSoulsBossPrototype
             public readonly int Rows;
             public readonly int FrameW;
             public readonly int FrameH;
-            public readonly float Duration;   // seconds per frame override (0 = use default)
-            public readonly bool  Loop;       // false = play once then return to Idle
+            public readonly float Duration;   // seconds per frame (0 = use 0.10f default)
+            public readonly bool Loop;
 
             public SheetInfo(int cols, int rows, int fw, int fh,
                              float duration = 0f, bool loop = true)
             {
-                Cols     = cols;
-                Rows     = rows;
-                FrameW   = fw;
-                FrameH   = fh;
-                Duration = duration;
-                Loop     = loop;
+                Cols = cols; Rows = rows; FrameW = fw; FrameH = fh;
+                Duration = duration; Loop = loop;
             }
         }
 
-        // Verified dimensions from pixel measurement of the actual sprite files:
-        //   Idle.png         256x256  -> 2 cols x 4 rows of 128x64 = 8 frames
-        //   Run.png          256x256  -> 2 cols x 4 rows of 128x64 = 8 frames
-        //   Attacks.png     1024x320  -> 8 cols x 5 rows of 128x64 = 40 frames
-        //   Death.png        256x128  -> 2 cols x 2 rows of 128x64 = 4 frames
-        //   Hurt.png         256x128  -> 2 cols x 2 rows of 128x64 = 4 frames
-        //   crouch_idle.png  256x256  -> 2 cols x 4 rows of 128x64 = 8 frames
-        //   Jump.png         256x256  -> 2 cols x 4 rows of 128x64 = 8 frames
-        private static readonly SheetInfo InfoIdle   = new SheetInfo(2, 4, 128, 64, 0.12f, loop: true);
-        private static readonly SheetInfo InfoRun    = new SheetInfo(2, 4, 128, 64, 0.09f, loop: true);
+        // =====================================================================
+        //  AttackSegment  — defines one attack's slice inside Attacks.png
+        //
+        //  All four attacks share a single Texture2D (_sheetAttack = Attacks.png).
+        //  Each segment records where its frames start in the LINEAR frame index
+        //  and how many frames it contains, so DrawSprite samples the right cells.
+        //
+        //  Pixel-verified layout (Attacks.png  1024x320, 8 cols x 5 rows, 128x64):
+        //
+        //    Attack          Key   Linear range   Count  Duration (s/frame)
+        //    --------------- ---   ------------   -----  ------------------
+        //    Upswing         Z      0 ..  6         7       0.07
+        //    Downswing       X      7 .. 13         7       0.07
+        //    Stab            C     14 .. 19         6       0.06
+        //    Heavy Slash     V     20 .. 28         9       0.09
+        //
+        //  Left-facing is handled by SpriteEffects.FlipHorizontally on the single
+        //  right-facing sheet — no mirrored sheet is needed.
+        // =====================================================================
+        private readonly struct AttackSegment
+        {
+            public readonly int StartFrame;    // first linear frame index
+            public readonly int FrameCount;    // number of frames in this attack
+            public readonly float Duration;      // seconds per frame for this attack
+
+            // Last valid linear frame index (inclusive)
+            public int EndFrame => StartFrame + FrameCount - 1;
+
+            public AttackSegment(int start, int count, float duration)
+            {
+                StartFrame = start; FrameCount = count; Duration = duration;
+            }
+        }
+
+        // Pixel-verified sheet descriptors
+        private static readonly SheetInfo InfoIdle = new SheetInfo(2, 4, 128, 64, 0.12f, loop: true);
+        private static readonly SheetInfo InfoRun = new SheetInfo(2, 4, 128, 64, 0.09f, loop: true);
         private static readonly SheetInfo InfoAttack = new SheetInfo(8, 5, 128, 64, 0.06f, loop: false);
-        private static readonly SheetInfo InfoHurt   = new SheetInfo(2, 2, 128, 64, 0.10f, loop: false);
-        private static readonly SheetInfo InfoDeath  = new SheetInfo(2, 2, 128, 64, 0.14f, loop: false);
-        // Crouch loops so the player can hold the crouch key indefinitely
+        private static readonly SheetInfo InfoHurt = new SheetInfo(2, 2, 128, 64, 0.10f, loop: false);
+        private static readonly SheetInfo InfoDeath = new SheetInfo(2, 2, 128, 64, 0.14f, loop: false);
         private static readonly SheetInfo InfoCrouch = new SheetInfo(2, 4, 128, 64, 0.12f, loop: true);
-        // Jump plays once then returns to Idle/Run when the key is released
-        private static readonly SheetInfo InfoJump   = new SheetInfo(2, 4, 128, 64, 0.09f, loop: false);
+        private static readonly SheetInfo InfoJump = new SheetInfo(2, 4, 128, 64, 0.09f, loop: false);
+
+        // Pixel-verified attack segments — slices inside Attacks.png (8 cols x 5 rows, 128x64)
+        //
+        //   Input   Animation       Linear range   Frames  s/frame
+        //   ------  --------------- ------------   ------  -------
+        //   LMB 1   Light upswing   L0  - L6          8    0.07
+        //   LMB 2   Light followup  L7  - L9         8    0.07   (combo after hit 1)
+        //   Q       Stab            L8  - L15         8    0.06   (same row as followup)
+        //   Z       Heavy downswing L14 - L19         8    0.09
+        //
+        //   All rows are right-facing. FlipHorizontally handles left-facing.
+        private static readonly AttackSegment SegLightSwing = new AttackSegment(0, 7, 0.07f);
+        private static readonly AttackSegment SegLightCombo = new AttackSegment(6, 4, 0.07f);
+        private static readonly AttackSegment SegStab = new AttackSegment(9, 5, 0.06f);
+        private static readonly AttackSegment SegHeavy = new AttackSegment(14, 6, 0.09f);
+
+        // Active segment — valid whenever CurrentAnimState is an attack state
+        private AttackSegment _activeSegment;
 
         // =====================================================================
         //  Constructor
         // =====================================================================
         public Player(Vector2 startPosition, int startingSkillPoints = 5)
         {
-            Position    = startPosition;
+            Position = startPosition;
             SkillPoints = startingSkillPoints;
-            _prevKb     = Keyboard.GetState();
+            _prevKb = Keyboard.GetState();
+            _prevMs = Mouse.GetState();
 
-            // Record the ground level from the spawn Y so the player always
-            // lands back on the same floor after a jump
-            _groundY    = startPosition.Y;
+            _groundY = startPosition.Y;
             _isGrounded = true;
-            _velocityY  = 0f;
+            _velocityY = 0f;
 
             RecalculateStats(new List<SkillNode>());
             CurrentHP = MaxHP;
@@ -265,13 +323,13 @@ namespace DarkSoulsBossPrototype
             _sheetJump = content.Load<Texture2D>("PlayerSpriteSheets/Jump");
 
             // Validate that every loaded sheet matches its expected dimensions
-            ValidateSheet(_sheetIdle,   InfoIdle,   "knight_idle");
-            ValidateSheet(_sheetRun,    InfoRun,    "knight_run");
+            ValidateSheet(_sheetIdle, InfoIdle, "knight_idle");
+            ValidateSheet(_sheetRun, InfoRun, "knight_run");
             ValidateSheet(_sheetAttack, InfoAttack, "knight_attack");
-            ValidateSheet(_sheetHurt,   InfoHurt,   "knight_hurt");
-            ValidateSheet(_sheetDeath,  InfoDeath,  "knight_death");
+            ValidateSheet(_sheetHurt, InfoHurt, "knight_hurt");
+            ValidateSheet(_sheetDeath, InfoDeath, "knight_death");
             ValidateSheet(_sheetCrouch, InfoCrouch, "knight_crouch");
-            ValidateSheet(_sheetJump,   InfoJump,   "knight_jump");
+            ValidateSheet(_sheetJump, InfoJump, "knight_jump");
 
             // Boot into Idle animation
             SetAnimation(PlayerAnimationState.Idle);
@@ -280,21 +338,21 @@ namespace DarkSoulsBossPrototype
         // Overload for callers that only pass ContentManager (pixel created separately)
         public void LoadContent(Microsoft.Xna.Framework.Content.ContentManager content)
         {
-            _sheetIdle   = content.Load<Texture2D>("knight_idle");
-            _sheetRun    = content.Load<Texture2D>("knight_run");
+            _sheetIdle = content.Load<Texture2D>("knight_idle");
+            _sheetRun = content.Load<Texture2D>("knight_run");
             _sheetAttack = content.Load<Texture2D>("knight_attack");
-            _sheetHurt   = content.Load<Texture2D>("knight_hurt");
-            _sheetDeath  = content.Load<Texture2D>("knight_death");
+            _sheetHurt = content.Load<Texture2D>("knight_hurt");
+            _sheetDeath = content.Load<Texture2D>("knight_death");
             _sheetCrouch = content.Load<Texture2D>("knight_crouch");
-            _sheetJump   = content.Load<Texture2D>("knight_jump");
+            _sheetJump = content.Load<Texture2D>("knight_jump");
 
-            ValidateSheet(_sheetIdle,   InfoIdle,   "knight_idle");
-            ValidateSheet(_sheetRun,    InfoRun,    "knight_run");
+            ValidateSheet(_sheetIdle, InfoIdle, "knight_idle");
+            ValidateSheet(_sheetRun, InfoRun, "knight_run");
             ValidateSheet(_sheetAttack, InfoAttack, "knight_attack");
-            ValidateSheet(_sheetHurt,   InfoHurt,   "knight_hurt");
-            ValidateSheet(_sheetDeath,  InfoDeath,  "knight_death");
+            ValidateSheet(_sheetHurt, InfoHurt, "knight_hurt");
+            ValidateSheet(_sheetDeath, InfoDeath, "knight_death");
             ValidateSheet(_sheetCrouch, InfoCrouch, "knight_crouch");
-            ValidateSheet(_sheetJump,   InfoJump,   "knight_jump");
+            ValidateSheet(_sheetJump, InfoJump, "knight_jump");
 
             SetAnimation(PlayerAnimationState.Idle);
         }
@@ -317,182 +375,210 @@ namespace DarkSoulsBossPrototype
 
         // =====================================================================
         //  SetAnimation
-        //  Switches to a new state, resets the frame counter, and binds the
-        //  correct sheet + grid dimensions.  Safe to call every frame — the
-        //  guard at the top prevents restarting a state that is already active
-        //  (unless it is a one-shot that has finished).
         // =====================================================================
         private void SetAnimation(PlayerAnimationState newState, bool forceRestart = false)
         {
-            // Do not restart the same looping animation unnecessarily
             if (CurrentAnimState == newState && !forceRestart && _activeSheet != null)
                 return;
 
-            CurrentAnimState  = newState;
-            _linearFrame      = 0;
-            _frameTimer       = 0f;
-            _playingOneShot   = false;
+            CurrentAnimState = newState;
+            _frameTimer = 0f;
+            _playingOneShot = false;
+
+            bool isAttack = newState == PlayerAnimationState.LightAttack1
+                         || newState == PlayerAnimationState.LightAttack2
+                         || newState == PlayerAnimationState.Stab
+                         || newState == PlayerAnimationState.HeavyAttack;
+
+            if (isAttack)
+            {
+                _activeSheet = _sheetAttack;
+                _frameCols = InfoAttack.Cols;
+                _frameRows = InfoAttack.Rows;
+                _frameW = InfoAttack.FrameW;
+                _frameH = InfoAttack.FrameH;
+                _totalFrames = InfoAttack.Cols * InfoAttack.Rows;
+
+                switch (newState)
+                {
+                    case PlayerAnimationState.LightAttack1:
+                        _activeSegment = SegLightSwing; break;
+                    case PlayerAnimationState.LightAttack2:
+                        _activeSegment = SegLightCombo; break;
+                    case PlayerAnimationState.Stab:
+                        _activeSegment = SegStab; break;
+                    default: // HeavyAttack
+                        _activeSegment = SegHeavy; break;
+                }
+
+                _linearFrame = _activeSegment.StartFrame;
+                _frameDuration = _activeSegment.Duration;
+                _playingOneShot = true;
+                return;
+            }
+
+            _linearFrame = 0;
 
             SheetInfo info;
             switch (newState)
             {
                 case PlayerAnimationState.Idle:
-                    _activeSheet = _sheetIdle;
-                    info         = InfoIdle;
-                    break;
-
+                    _activeSheet = _sheetIdle; info = InfoIdle; break;
                 case PlayerAnimationState.Running:
-                    _activeSheet = _sheetRun;
-                    info         = InfoRun;
-                    break;
-
-                case PlayerAnimationState.Attacking:
-                    _activeSheet    = _sheetAttack;
-                    info            = InfoAttack;
-                    _playingOneShot = true;
-                    break;
-
+                    _activeSheet = _sheetRun; info = InfoRun; break;
                 case PlayerAnimationState.Hurt:
-                    _activeSheet    = _sheetHurt;
-                    info            = InfoHurt;
-                    _playingOneShot = true;
-                    break;
-
+                    _activeSheet = _sheetHurt; info = InfoHurt;
+                    _playingOneShot = true; break;
                 case PlayerAnimationState.Dead:
-                    _activeSheet = _sheetDeath;
-                    info         = InfoDeath;
-                    break;
-
+                    _activeSheet = _sheetDeath; info = InfoDeath; break;
                 case PlayerAnimationState.Crouching:
-                    // Crouch loops for as long as S is held
-                    _activeSheet = _sheetCrouch;
-                    info         = InfoCrouch;
-                    break;
-
+                    _activeSheet = _sheetCrouch; info = InfoCrouch; break;
                 case PlayerAnimationState.Jumping:
-                    // Jump is a one-shot — plays once then snaps back to Idle/Run
-                    _activeSheet    = _sheetJump;
-                    info            = InfoJump;
-                    _playingOneShot = true;
-                    break;
-
+                    _activeSheet = _sheetJump; info = InfoJump;
+                    _playingOneShot = true; break;
                 default:
-                    _activeSheet = _sheetIdle;
-                    info         = InfoIdle;
-                    break;
+                    _activeSheet = _sheetIdle; info = InfoIdle; break;
             }
 
-            _frameCols    = info.Cols;
-            _frameRows    = info.Rows;
-            _frameW       = info.FrameW;
-            _frameH       = info.FrameH;
-            _totalFrames  = info.Cols * info.Rows;
+            _frameCols = info.Cols;
+            _frameRows = info.Rows;
+            _frameW = info.FrameW;
+            _frameH = info.FrameH;
+            _totalFrames = info.Cols * info.Rows;
             _frameDuration = info.Duration > 0f ? info.Duration : 0.10f;
         }
+
+        private bool IsAttacking =>
+            CurrentAnimState == PlayerAnimationState.LightAttack1 ||
+            CurrentAnimState == PlayerAnimationState.LightAttack2 ||
+            CurrentAnimState == PlayerAnimationState.Stab ||
+            CurrentAnimState == PlayerAnimationState.HeavyAttack;
 
         // =====================================================================
         //  Update
         //
-        //  Key bindings
-        //  ------------
-        //  A / Left    Move left
-        //  D / Right   Move right
-        //  W / Space   Jump  (only when grounded — no double jump)
-        //  S / Down    Crouch (only when grounded — no crouching in air)
-        //  Z           Attack
+        //  Controls
+        //  --------
+        //  A / Left     Move left
+        //  D / Right    Move right
+        //  W / Space    Jump (grounded only, no double jump)
+        //  S / Down     Crouch (grounded only)
+        //  LMB          Light attack 1 — upswing (L0-L7)
+        //               If pressed again within COMBO_WINDOW after hit 1 finishes,
+        //               automatically chains into Light attack 2 — followup (L8-L15)
+        //  Q            Stab (L8-L15) — plays independently, no combo
+        //  Z            Heavy downswing (L16-L23)
         //
-        //  Jump physics
-        //  ------------
-        //  Pressing W/Space gives the player an upward velocity of JUMP_VELOCITY.
-        //  Each frame gravity is added to _velocityY.  When Position.Y reaches
-        //  _groundY the player lands, _velocityY is zeroed and _isGrounded is set.
-        //  The player can move left/right freely during the entire jump arc.
-        //  Double-jumping is blocked by the _isGrounded gate on the jump input.
-        //
-        //  Crouch hitbox
-        //  -------------
-        //  While crouching the Bounds property returns a CROUCH_HEIGHT (32px)
-        //  rectangle anchored to the same ground level as the standing box.
-        //  This is purely collision/hitbox logic — the sprite does not move.
+        //  Combo logic
+        //  -----------
+        //  When LightAttack1 finishes, a COMBO_WINDOW timer starts.
+        //  If LMB is pressed while _comboWindowOpen == true, _comboPending is set.
+        //  On the next Update the combo window check fires LightAttack2.
+        //  If the window expires without a click, the combo is lost.
         // =====================================================================
         public void Update(GameTime gameTime, Rectangle worldBounds)
         {
             float dt = (float)gameTime.ElapsedGameTime.TotalSeconds;
-            var   kb = Keyboard.GetState();
+            var kb = Keyboard.GetState();
+            var ms = Mouse.GetState();
 
-            // ── 1. Read input ──────────────────────────────────────────────────
-            // Jump fires on the leading edge of W or Space
-            bool jumpPressed  = (kb.IsKeyDown(Keys.W)     && _prevKb.IsKeyUp(Keys.W))
-                             || (kb.IsKeyDown(Keys.Space)  && _prevKb.IsKeyUp(Keys.Space));
-            bool crouchHeld   =  kb.IsKeyDown(Keys.S)     || kb.IsKeyDown(Keys.Down);
-            bool attackPressed = kb.IsKeyDown(Keys.Z)     && _prevKb.IsKeyUp(Keys.Z);
+            // ── 1. Read input (edge-detect: fires once per press) ─────────────
+            bool jumpPressed = (kb.IsKeyDown(Keys.W) && _prevKb.IsKeyUp(Keys.W))
+                            || (kb.IsKeyDown(Keys.Space) && _prevKb.IsKeyUp(Keys.Space));
+            bool crouchHeld = kb.IsKeyDown(Keys.S) || kb.IsKeyDown(Keys.Down);
+
+            // Left mouse button — edge detect
+            bool lmbPressed = ms.LeftButton == ButtonState.Pressed
+                            && _prevMs.LeftButton == ButtonState.Released;
+
+            // Q = stab, Z = heavy — edge detect
+            bool stabPressed = kb.IsKeyDown(Keys.Q) && _prevKb.IsKeyUp(Keys.Q);
+            bool heavyPressed = kb.IsKeyDown(Keys.Z) && _prevKb.IsKeyUp(Keys.Z);
 
             float horizInput = 0f;
             if (!IsDead)
             {
-                if (kb.IsKeyDown(Keys.A) || kb.IsKeyDown(Keys.Left))  horizInput -= 1f;
+                if (kb.IsKeyDown(Keys.A) || kb.IsKeyDown(Keys.Left)) horizInput -= 1f;
                 if (kb.IsKeyDown(Keys.D) || kb.IsKeyDown(Keys.Right)) horizInput += 1f;
             }
 
-            // ── 2. Jump — only allowed when grounded (no double jump) ──────────
-            if (jumpPressed && _isGrounded && !IsDead && !_playingOneShot)
+            // ── 2. Combo window timer ─────────────────────────────────────────
+            // Counts down whenever the window is open.
+            // A LMB press during the window sets _comboPending so the combo
+            // fires at the top of the state machine on the next Update.
+            if (_comboWindowOpen)
             {
-                _velocityY  = JUMP_VELOCITY;   // give upward impulse
-                _isGrounded = false;           // leave the ground
+                _comboWindowTimer -= dt;
+
+                if (lmbPressed)
+                    _comboPending = true;
+
+                if (_comboWindowTimer <= 0f)
+                {
+                    _comboWindowOpen = false;
+                    _comboWindowTimer = 0f;
+                    _comboPending = false;   // window expired, combo lost
+                }
             }
 
-            // ── 3. Gravity — applied every frame, capped at terminal velocity ──
+            // ── 3. Jump — grounded only, no double jump ───────────────────────
+            if (jumpPressed && _isGrounded && !IsDead && !_playingOneShot)
+            {
+                _velocityY = JUMP_VELOCITY;
+                _isGrounded = false;
+            }
+
+            // ── 4. Gravity ────────────────────────────────────────────────────
             if (!_isGrounded)
             {
                 _velocityY += GRAVITY * dt;
-                _velocityY  = Math.Min(_velocityY, MAX_FALL_SPEED);
+                _velocityY = Math.Min(_velocityY, MAX_FALL_SPEED);
             }
 
-            // ── 4. Integrate vertical position ────────────────────────────────
+            // ── 5. Vertical integration ───────────────────────────────────────
             float newY = Position.Y + _velocityY * dt;
+            if (newY >= _groundY) { newY = _groundY; _velocityY = 0f; _isGrounded = true; }
+            if (newY < worldBounds.Top) { newY = worldBounds.Top; _velocityY = 0f; }
 
-            // Ground collision — snap back to floor when the arc comes down
-            if (newY >= _groundY)
-            {
-                newY        = _groundY;
-                _velocityY  = 0f;
-                _isGrounded = true;
-            }
-
-            // Ceiling collision — stop upward movement at world top
-            if (newY < worldBounds.Top)
-            {
-                newY       = worldBounds.Top;
-                _velocityY = 0f;
-            }
-
-            // ── 5. Integrate horizontal position ──────────────────────────────
+            // ── 6. Horizontal integration ─────────────────────────────────────
             float newX = Position.X + horizInput * MoveSpeed * dt;
             newX = Math.Clamp(newX, worldBounds.Left, worldBounds.Right - WIDTH);
-
             Position = new Vector2(newX, newY);
 
-            // Update facing direction whenever there is horizontal input
             if (horizInput < 0f) _facingLeft = true;
             if (horizInput > 0f) _facingLeft = false;
 
-            // ── 6. Animation state machine ────────────────────────────────────
-            // Priority: Dead > one-shot in progress > Attack > Airborne > Crouch > Run > Idle
+            // ── 7. Animation state machine ────────────────────────────────────
+            // Priority: Dead > one-shot in progress > combo pending
+            //           > new attack input > airborne > crouch > run > idle
             if (!IsDead && !_playingOneShot)
             {
-                if (attackPressed)
+                if (_comboPending)
                 {
-                    SetAnimation(PlayerAnimationState.Attacking);
+                    // Player clicked LMB during the combo window after LightAttack1
+                    _comboPending = false;
+                    _comboWindowOpen = false;
+                    SetAnimation(PlayerAnimationState.LightAttack2);
+                }
+                else if (lmbPressed)
+                {
+                    // Fresh LMB press — always starts LightAttack1
+                    SetAnimation(PlayerAnimationState.LightAttack1);
+                }
+                else if (stabPressed)
+                {
+                    SetAnimation(PlayerAnimationState.Stab);
+                }
+                else if (heavyPressed)
+                {
+                    SetAnimation(PlayerAnimationState.HeavyAttack);
                 }
                 else if (!_isGrounded)
                 {
-                    // In the air — play jump animation regardless of horizontal input.
-                    // Crouch is blocked in the air.
                     SetAnimation(PlayerAnimationState.Jumping);
                 }
                 else if (crouchHeld)
                 {
-                    // On the ground and holding S — crouch (blocks horizontal anim)
                     SetAnimation(PlayerAnimationState.Crouching);
                 }
                 else if (horizInput != 0f)
@@ -505,7 +591,7 @@ namespace DarkSoulsBossPrototype
                 }
             }
 
-            // ── 7. Advance frame counter ───────────────────────────────────────
+            // ── 8. Advance frame counter ──────────────────────────────────────
             if (_activeSheet != null)
             {
                 _frameTimer += dt;
@@ -514,37 +600,63 @@ namespace DarkSoulsBossPrototype
                     _frameTimer -= _frameDuration;
                     _linearFrame++;
 
-                    if (_linearFrame >= _totalFrames)
+                    if (IsAttacking)
                     {
-                        if (CurrentAnimState == PlayerAnimationState.Dead)
-                        {
-                            _linearFrame = _totalFrames - 1;   // hold last frame
-                        }
-                        else if (_playingOneShot)
+                        // Each attack only plays its own segment slice.
+                        // When the last frame of the segment is passed, finish.
+                        if (_linearFrame > _activeSegment.EndFrame)
                         {
                             _playingOneShot = false;
 
-                            // Choose correct follow-up animation from current state
-                            if (!_isGrounded)                 SetAnimation(PlayerAnimationState.Jumping);
-                            else if (crouchHeld)              SetAnimation(PlayerAnimationState.Crouching);
-                            else if (horizInput != 0f)        SetAnimation(PlayerAnimationState.Running);
-                            else                              SetAnimation(PlayerAnimationState.Idle);
+                            // LightAttack1 ending opens the combo window
+                            if (CurrentAnimState == PlayerAnimationState.LightAttack1)
+                            {
+                                _comboWindowOpen = true;
+                                _comboWindowTimer = COMBO_WINDOW;
+                                _comboPending = false;
+                            }
+
+                            // Return to correct follow-up state
+                            if (!_isGrounded) SetAnimation(PlayerAnimationState.Jumping);
+                            else if (crouchHeld) SetAnimation(PlayerAnimationState.Crouching);
+                            else if (horizInput != 0f) SetAnimation(PlayerAnimationState.Running);
+                            else SetAnimation(PlayerAnimationState.Idle);
                         }
-                        else
+                    }
+                    else if (CurrentAnimState == PlayerAnimationState.Dead)
+                    {
+                        _linearFrame = _totalFrames - 1;   // hold last frame forever
+                    }
+                    else if (_playingOneShot)
+                    {
+                        // Hurt or Jump finished
+                        if (_linearFrame >= _totalFrames)
                         {
-                            _linearFrame = 0;   // loop
+                            _playingOneShot = false;
+                            if (!_isGrounded) SetAnimation(PlayerAnimationState.Jumping);
+                            else if (crouchHeld) SetAnimation(PlayerAnimationState.Crouching);
+                            else if (horizInput != 0f) SetAnimation(PlayerAnimationState.Running);
+                            else SetAnimation(PlayerAnimationState.Idle);
                         }
+                    }
+                    else
+                    {
+                        // Looping states: Idle, Run, Crouch
+                        if (_linearFrame >= _totalFrames)
+                            _linearFrame = 0;
                     }
                 }
             }
 
             _prevKb = kb;
+            _prevMs = ms;
         }
 
         // =====================================================================
         //  TriggerHurt
-        //  Call this from outside (e.g. boss hit detection) instead of directly
-        //  calling TakeDamage so the Hurt animation plays correctly.
+        //  Call from boss hit detection instead of TakeDamage directly.
+        //  Applies damage then plays the correct animation (Hurt or Dead).
+        //  If an attack is currently playing it is interrupted by damage.
         // =====================================================================
         public void TriggerHurt(float rawDamage)
         {
@@ -586,8 +698,15 @@ namespace DarkSoulsBossPrototype
         // ── Core sprite renderer ──────────────────────────────────────────────
         private void DrawSprite(SpriteBatch sb)
         {
-            // Clamp to valid range defensively
-            int frame = Math.Clamp(_linearFrame, 0, _totalFrames - 1);
+            // For attack states clamp within the segment's own frame range.
+            // For all other states clamp within 0.._totalFrames-1.
+            int frame;
+            if (IsAttacking)
+                frame = Math.Clamp(_linearFrame,
+                                   _activeSegment.StartFrame,
+                                   _activeSegment.EndFrame);
+            else
+                frame = Math.Clamp(_linearFrame, 0, _totalFrames - 1);
 
             // Convert linear index to 2D grid coordinates
             int col = frame % _frameCols;
@@ -596,12 +715,11 @@ namespace DarkSoulsBossPrototype
             // Source rectangle: one cell in the multi-row grid
             var src = new Rectangle(col * _frameW, row * _frameH, _frameW, _frameH);
 
-            // Draw position: centre of the hitbox (the origin of the sprite draw)
+            // Draw position: centre of the hitbox
             Vector2 drawPos = Centre;
 
-            // Origin: centre of the source frame cell
-            // This makes the sprite scale and flip around its own visual centre,
-            // keeping it perfectly aligned with the hitbox.
+            // Origin at the centre of the source frame cell so flipping and
+            // scaling both pivot around the sprite's own visual centre
             var origin = new Vector2(_frameW * 0.5f, _frameH * 0.5f);
 
             SpriteEffects flip = _facingLeft
@@ -609,15 +727,15 @@ namespace DarkSoulsBossPrototype
                 : SpriteEffects.None;
 
             sb.Draw(
-                texture:         _activeSheet,
-                position:        drawPos,
+                texture: _activeSheet,
+                position: drawPos,
                 sourceRectangle: src,
-                color:           Color.White,
-                rotation:        0f,
-                origin:          origin,
-                scale:           new Vector2(DRAW_SCALE),
-                effects:         flip,
-                layerDepth:      0f);
+                color: Color.White,
+                rotation: 0f,
+                origin: origin,
+                scale: new Vector2(DRAW_SCALE),
+                effects: flip,
+                layerDepth: 0f);
         }
 
         // ── Fallback coloured box (shown before LoadContent is called) ─────────
@@ -634,19 +752,19 @@ namespace DarkSoulsBossPrototype
         // ── HP bar above the hitbox ───────────────────────────────────────────
         private void DrawHPBar(SpriteBatch sb, Texture2D px)
         {
-            const int BAR_H  = 6;
+            const int BAR_H = 6;
             const int OFFSET = 10;
 
             var bg = new Rectangle(Bounds.X, Bounds.Y - OFFSET - BAR_H, WIDTH, BAR_H);
             sb.Draw(px, bg, new Color(40, 40, 40, 200));
 
             float frac = MaxHP > 0f ? Math.Clamp(CurrentHP / MaxHP, 0f, 1f) : 0f;
-            int   fill = (int)(WIDTH * frac);
+            int fill = (int)(WIDTH * frac);
             if (fill <= 0) return;
 
-            Color barColor = frac > 0.60f ? new Color( 60, 200,  60)
-                           : frac > 0.30f ? new Color(220, 200,  30)
-                           :                new Color(220,  50,  50);
+            Color barColor = frac > 0.60f ? new Color(60, 200, 60)
+                           : frac > 0.30f ? new Color(220, 200, 30)
+                           : new Color(220, 50, 50);
 
             sb.Draw(px, new Rectangle(bg.X, bg.Y, fill, BAR_H), barColor);
         }
@@ -656,10 +774,10 @@ namespace DarkSoulsBossPrototype
         // =====================================================================
         public void RecalculateStats(List<SkillNode> allNodes)
         {
-            _totalMaxHPBonus       = 0f;
-            _totalMoveSpeedPct     = 0f;
-            _totalAttackDamagePct  = 0f;
-            _totalDamageReduction  = 0f;
+            _totalMaxHPBonus = 0f;
+            _totalMoveSpeedPct = 0f;
+            _totalAttackDamagePct = 0f;
+            _totalDamageReduction = 0f;
             _totalArmorPenetration = 0f;
 
             if (allNodes != null)
@@ -683,12 +801,12 @@ namespace DarkSoulsBossPrototype
                 }
             }
 
-            MaxHP            = baseMaxHP + _totalMaxHPBonus;
-            MoveSpeed        = baseMoveSpeed * (1f + _totalMoveSpeedPct);
-            AttackDamage     = baseAttackDamage * (1f + _totalAttackDamagePct);
-            DamageReduction  = Math.Min(baseDamageReduction + _totalDamageReduction, MAX_DAMAGE_REDUCTION);
+            MaxHP = baseMaxHP + _totalMaxHPBonus;
+            MoveSpeed = baseMoveSpeed * (1f + _totalMoveSpeedPct);
+            AttackDamage = baseAttackDamage * (1f + _totalAttackDamagePct);
+            DamageReduction = Math.Min(baseDamageReduction + _totalDamageReduction, MAX_DAMAGE_REDUCTION);
             ArmorPenetration = Math.Clamp(baseArmorPenetration + _totalArmorPenetration, 0f, 1f);
-            CurrentHP        = Math.Clamp(CurrentHP, 0f, MaxHP);
+            CurrentHP = Math.Clamp(CurrentHP, 0f, MaxHP);
         }
 
         // =====================================================================
@@ -709,15 +827,19 @@ namespace DarkSoulsBossPrototype
 
         public void Respawn(Vector2 spawnPosition)
         {
-            Position        = spawnPosition;
-            CurrentHP       = MaxHP;
-            _linearFrame    = 0;
-            _frameTimer     = 0f;
+            Position = spawnPosition;
+            CurrentHP = MaxHP;
+            _linearFrame = 0;
+            _frameTimer = 0f;
             _playingOneShot = false;
-            _velocityY      = 0f;
-            _isGrounded     = true;
-            _groundY        = spawnPosition.Y;   // re-anchor ground to spawn floor
-            _prevKb         = Keyboard.GetState();
+            _velocityY = 0f;
+            _isGrounded = true;
+            _groundY = spawnPosition.Y;
+            _comboWindowOpen = false;
+            _comboWindowTimer = 0f;
+            _comboPending = false;
+            _prevKb = Keyboard.GetState();
+            _prevMs = Mouse.GetState();
             SetAnimation(PlayerAnimationState.Idle, forceRestart: true);
         }
 
@@ -730,12 +852,12 @@ namespace DarkSoulsBossPrototype
         public string GetStatsSummary()
         {
             return
-                "HP: "    + CurrentHP.ToString("F0") + "/" + MaxHP.ToString("F0") +
+                "HP: " + CurrentHP.ToString("F0") + "/" + MaxHP.ToString("F0") +
                 "  SPD: " + MoveSpeed.ToString("F0") +
                 "  ATK: " + AttackDamage.ToString("F1") +
-                "  DEF: " + (DamageReduction  * 100f).ToString("F0") + "%" +
+                "  DEF: " + (DamageReduction * 100f).ToString("F0") + "%" +
                 "  PEN: " + (ArmorPenetration * 100f).ToString("F0") + "%" +
-                "  SP: "  + SkillPoints;
+                "  SP: " + SkillPoints;
         }
     }
 }
